@@ -7,37 +7,33 @@ function rateLimiter(req, res, next) {
   const clientIP = req.ip;
   const currentTime = Date.now();
 
-  let clientData = requestStore.get(clientIP);
+  console.log("*************map",requestStore);
 
-  // First request OR window expired
-  if (
-    !clientData ||
-    currentTime - clientData.windowStart >= WINDOW_SIZE
-  ) {
-    clientData = {
-      count: 0,
-      windowStart: currentTime,
-    };
+  // Get previous request timestamps
+  let requestTimestamps = requestStore.get(clientIP) || [];
 
-    requestStore.set(clientIP, clientData);
-  }
+  // Anything older than 30 seconds is irrelevant
+  const windowStart = currentTime - WINDOW_SIZE;
 
-  const resetTime = clientData.windowStart + WINDOW_SIZE;
-  const retryAfterSeconds = Math.ceil(
-    (resetTime - currentTime) / 1000
+  requestTimestamps = requestTimestamps.filter(
+    (timestamp) => timestamp > windowStart
   );
 
-  // Common rate-limit headers
+  // Rate limit headers
   res.setHeader("X-RateLimit-Limit", MAX_REQUESTS);
-  res.setHeader(
-    "X-RateLimit-Reset",
-    Math.ceil(resetTime / 1000)
-  );
 
   // Limit exceeded
-  if (clientData.count >= MAX_REQUESTS) {
+  if (requestTimestamps.length >= MAX_REQUESTS) {
+    const oldestRequest = requestTimestamps[0];
+
+    const retryAfterSeconds = Math.ceil(
+      (oldestRequest + WINDOW_SIZE - currentTime) / 1000
+    );
+
     res.setHeader("X-RateLimit-Remaining", 0);
     res.setHeader("Retry-After", retryAfterSeconds);
+
+    requestStore.set(clientIP, requestTimestamps);
 
     return res.status(429).json({
       success: false,
@@ -46,11 +42,13 @@ function rateLimiter(req, res, next) {
     });
   }
 
-  // Count current request
-  clientData.count += 1;
+  // Add current request timestamp
+  requestTimestamps.push(currentTime);
+
+  requestStore.set(clientIP, requestTimestamps);
 
   const remainingRequests =
-    MAX_REQUESTS - clientData.count;
+    MAX_REQUESTS - requestTimestamps.length;
 
   res.setHeader(
     "X-RateLimit-Remaining",
