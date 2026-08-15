@@ -10,8 +10,8 @@ app.use(express.json());
 app.get("/", (req, res) => {
   res.json({
     message: "Distributed Rate Limiter",
-    level: 3,
-    algorithm: "Sliding Window Log",
+    level: 4,
+    algorithm: "Token Bucket",
   });
 });
 

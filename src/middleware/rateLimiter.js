@@ -1,39 +1,60 @@
-const requestStore = new Map();
+const buckets = new Map();
 
-const WINDOW_SIZE = 30 * 1000; // 30 seconds
-const MAX_REQUESTS = 5;
+const BUCKET_CAPACITY = 5;
+
+// 1 token every 6 seconds
+const REFILL_RATE = 1 / 6000;
 
 function rateLimiter(req, res, next) {
   const clientIP = req.ip;
   const currentTime = Date.now();
 
-  console.log("*************map",requestStore);
+  let bucket = buckets.get(clientIP);
 
-  // Get previous request timestamps
-  let requestTimestamps = requestStore.get(clientIP) || [];
+  // First request from this IP
+  if (!bucket) {
+    bucket = {
+      tokens: BUCKET_CAPACITY,
+      lastRefillTime: currentTime,
+    };
 
-  // Anything older than 30 seconds is irrelevant
-  const windowStart = currentTime - WINDOW_SIZE;
+    buckets.set(clientIP, bucket);
+  }
 
-  requestTimestamps = requestTimestamps.filter(
-    (timestamp) => timestamp > windowStart
+  // Calculate how much time has passed
+  const timePassed = currentTime - bucket.lastRefillTime;
+
+  // Calculate tokens generated during that time
+  const tokensToAdd = timePassed * REFILL_RATE;
+
+  // Refill bucket
+  bucket.tokens = Math.min(
+    BUCKET_CAPACITY,
+    bucket.tokens + tokensToAdd
   );
 
-  // Rate limit headers
-  res.setHeader("X-RateLimit-Limit", MAX_REQUESTS);
+  // Update refill time
+  bucket.lastRefillTime = currentTime;
 
-  // Limit exceeded
-  if (requestTimestamps.length >= MAX_REQUESTS) {
-    const oldestRequest = requestTimestamps[0];
+  res.setHeader(
+    "X-RateLimit-Limit",
+    BUCKET_CAPACITY
+  );
+
+  // No token available
+  if (bucket.tokens < 1) {
+    const timeUntilNextToken =
+      (1 - bucket.tokens) / REFILL_RATE;
 
     const retryAfterSeconds = Math.ceil(
-      (oldestRequest + WINDOW_SIZE - currentTime) / 1000
+      timeUntilNextToken / 1000
     );
 
     res.setHeader("X-RateLimit-Remaining", 0);
-    res.setHeader("Retry-After", retryAfterSeconds);
-
-    requestStore.set(clientIP, requestTimestamps);
+    res.setHeader(
+      "Retry-After",
+      retryAfterSeconds
+    );
 
     return res.status(429).json({
       success: false,
@@ -42,17 +63,12 @@ function rateLimiter(req, res, next) {
     });
   }
 
-  // Add current request timestamp
-  requestTimestamps.push(currentTime);
-
-  requestStore.set(clientIP, requestTimestamps);
-
-  const remainingRequests =
-    MAX_REQUESTS - requestTimestamps.length;
+  // Consume one token
+  bucket.tokens -= 1;
 
   res.setHeader(
     "X-RateLimit-Remaining",
-    remainingRequests
+    Math.floor(bucket.tokens)
   );
 
   next();
